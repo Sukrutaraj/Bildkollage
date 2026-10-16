@@ -38,6 +38,10 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .thumb .order{position:absolute;top:6px;left:6px;background:#000a;color:#fff;border-radius:6px;padding:2px 8px;font-size:.85rem}
 .thumb-foot{display:flex;justify-content:space-between;gap:4px;padding:6px;min-height:42px}
 .thumb-foot button{padding:5px 9px;border-radius:7px;background:#ececec;font-size:.85rem}
+.thumb-foot .back-poster{width:100%;margin-top:5px;background:#e5f1fb;color:#145b9e;font-size:.82rem}
+.thumb-foot .back-poster[aria-pressed="true"]{background:var(--accent);color:#fff}
+.thumb-foot{flex-wrap:wrap}
+.thumb-foot .move-row{display:flex;justify-content:space-between;gap:4px;width:100%}
 .thumb-foot .del{background:#fde8e8;color:#9b1c1c}
 .nav{display:flex;justify-content:center;gap:12px;margin-top:22px;flex-wrap:wrap}
 /* Layoutförslag */
@@ -58,6 +62,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .cell{position:absolute;overflow:hidden}
 .cell img{display:block;width:100%;height:100%;object-fit:cover}
 .cell img.rot{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%) rotate(90deg)}
+.cell img.fit-contain{object-fit:contain;background:#fff}
 /* Nedladdning */
 .formats{display:flex;justify-content:center;gap:0;margin:22px auto 0;width:max-content;max-width:100%;background:#eee;border-radius:10px;padding:4px}
 .format{background:transparent;color:#333;border-radius:8px;padding:10px 22px}
@@ -94,7 +99,7 @@ footer{text-align:center;color:var(--muted);font-size:.82rem;padding:0 16px 24px
   <div class="upload-start" id="uploadStart">
    <div class="upload-symbol" aria-hidden="true">📷</div>
    <label class="button primary big" for="fileInput">＋ Lägg till bilder</label>
-   <p>1–20 bilder. De delas automatiskt på fram- och baksida.</p>
+   <p>1–20 bilder. Välj eventuellt en bild som egen A4-baksida.</p>
   </div>
   <input id="fileInput" type="file" accept="image/*" multiple>
   <div id="selectedToolbar" class="toolbar" hidden>
@@ -157,7 +162,7 @@ footer{text-align:center;color:var(--muted);font-size:.82rem;padding:0 16px 24px
  const imageList = $('imageList'), status = $('status');
  let images = [];             // {id, name, ready, url, thumb, src(canvas), w, h}
  let nextId = 1, loading = 0, loaded = 0, toLoad = 0;
- let proposals = [], selected = 0, format = 'pdf';
+ let proposals = [], selected = 0, format = 'pdf', posterBackId = null;
 
  // ================= Steg =================
  function showStep(step) {
@@ -181,7 +186,7 @@ footer{text-align:center;color:var(--muted);font-size:.82rem;padding:0 16px 24px
  function canContinue() { return images.length > 0 && loading === 0; }
  function clearAll() {
    images.forEach(x => { if (x.url) URL.revokeObjectURL(x.url); if (x.thumb) URL.revokeObjectURL(x.thumb); });
-   images = []; proposals = []; selected = 0;
+   images = []; proposals = []; selected = 0; posterBackId = null;
    renderList();
  }
 
@@ -271,6 +276,7 @@ footer{text-align:center;color:var(--muted);font-size:.82rem;padding:0 16px 24px
    renderList();
  }
  function removeImage(id) {
+   if (posterBackId === id) posterBackId = null;
    const i = images.findIndex(x => x.id === id);
    if (i >= 0) { const x = images[i]; if (x.url) URL.revokeObjectURL(x.url); if (x.thumb) URL.revokeObjectURL(x.thumb); images.splice(i, 1); }
    renderList();
@@ -293,11 +299,15 @@ footer{text-align:center;color:var(--muted);font-size:.82rem;padding:0 16px 24px
        b.setAttribute('aria-label', label); if (cls) b.className = cls; b.disabled = !!dis;
        b.addEventListener('click', fn); return b;
      };
-     foot.append(
+     const moveRow = document.createElement('div'); moveRow.className = 'move-row';
+     moveRow.append(
        mk('←', 'Flytta bakåt', () => move(im.id, -1), '', i === 0),
        mk('✕', 'Ta bort ' + im.name, () => removeImage(im.id), 'del'),
        mk('→', 'Flytta framåt', () => move(im.id, 1), '', i === images.length - 1)
      );
+     const poster = mk(posterBackId === im.id ? 'Baksida A4 ✓' : 'Baksida A4', posterBackId === im.id ? 'Ta bort som baksida A4' : 'Använd som egen baksida i A4', () => { posterBackId = posterBackId === im.id ? null : im.id; renderList(); }, 'back-poster');
+     poster.setAttribute('aria-pressed', String(posterBackId === im.id));
+     foot.append(moveRow, poster);
    }
    card.append(order, foot);
  }
@@ -415,9 +425,14 @@ footer{text-align:center;color:var(--muted);font-size:.82rem;padding:0 16px 24px
      return { im, a: rot ? 1 / a : a, rot };
    });
    const n = base.length, best = new Map();
+   const totalMasks = 1 << (n - 1);
+   // Vid många bilder provas ett representativt urval av radbrytningar så att verktyget förblir snabbt.
+   const masks = totalMasks <= 4096
+     ? Array.from({ length: totalMasks }, (_, i) => i)
+     : Array.from({ length: 512 }, (_, i) => Math.floor(i * (totalMasks - 1) / 511));
    for (const ord of orderings(n)) {
      const a = ord.map(i => base[i].a);
-     for (let mask = 0; mask < (1 << (n - 1)); mask++) {
+     for (const mask of masks) {
        for (const cols of [false, true]) {
          if (n === 1 && cols) continue;
          const c = score(a, mask, fill, cols);
@@ -455,6 +470,25 @@ footer{text-align:center;color:var(--muted);font-size:.82rem;padding:0 16px 24px
  }
 
  function buildProposals() {
+   if (posterBackId !== null) {
+     const backImage = images.find(im => im.id === posterBackId);
+     const frontImages = images.filter(im => im.id !== posterBackId);
+     const backPage = { W: PAGE.W, H: PAGE.H, boxes: [{ im: backImage, x: 0, y: 0, w: PAGE.W, h: PAGE.H, fit: 'contain' }] };
+     if (!frontImages.length) {
+       proposals = [{ name: 'Hela bilden på baksidan', note: 'Hela bilden visas på ett eget A4-ark.', pages: [backPage] }];
+       selected = 0; return;
+     }
+     const fill = pageCandidates(frontImages, true);
+     const whole = pageCandidates(frontImages, false);
+     const frontPage = list => ({ W: PAGE.W, H: PAGE.H, boxes: (list[0] || { boxes: [] }).boxes });
+     const altPage = list => ({ W: PAGE.W, H: PAGE.H, boxes: (list[Math.min(1, list.length - 1)] || { boxes: [] }).boxes });
+     proposals = [
+       { name: 'Yta och balans', note: 'Kollage på framsidan. Den valda bilden får ett eget A4-ark.', pages: [frontPage(fill), backPage] },
+       { name: 'Alternativ placering', note: 'Samma bilder, annan fördelning på framsidan.', pages: [altPage(fill), backPage] },
+       { name: 'Hela bilderna syns', note: 'Kollage utan beskärning på framsidan. Egen A4-baksida.', pages: [frontPage(whole), backPage] }
+     ];
+     selected = 0; return;
+   }
    if (images.length === 1) { proposals = posterProposals(); selected = 0; return; }
    const sides = splitSides();
    const fill = sides.map(s => pageCandidates(s, true));
@@ -465,7 +499,6 @@ footer{text-align:center;color:var(--muted);font-size:.82rem;padding:0 16px 24px
      { name: 'Fyll sidan – annan placering', note: 'Samma bilder, annan uppdelning.', pages: pick(fill, 1) },
      { name: 'Hela bilderna syns', note: 'Inget beskärs. Lite vit yta kan bli kvar.', pages: pick(whole, 0) }
    ];
-   // Ta bort förslag som blev exakt likadana (t.ex. med 1 bild)
    const key = p => JSON.stringify(p.pages.map(pg => pg.boxes.map(b => [b.x, b.y, b.w, b.h].map(v => v.toFixed(1)))));
    const seen = new Set();
    proposals = proposals.filter(p => { const k = key(p); if (seen.has(k)) return false; seen.add(k); return true; });
@@ -480,6 +513,7 @@ footer{text-align:center;color:var(--muted);font-size:.82rem;padding:0 16px 24px
      : [b.x, b.y, b.w, b.h].map(v => v + 'mm');
    [cell.style.left, cell.style.top, cell.style.width, cell.style.height] = pos;
    const img = document.createElement('img'); img.src = small ? b.im.thumb : b.im.url; img.alt = '';
+   if (b.fit === 'contain') img.classList.add('fit-contain');
    if (b.rot) {
      img.className = 'rot';
      img.style.width = (b.h / b.w * 100) + '%';
@@ -570,6 +604,11 @@ footer{text-align:center;color:var(--muted);font-size:.82rem;padding:0 16px 24px
  // Ritar en ruta (med samma beskärning/vridning som förhandsvisningen) på en canvas.
  function drawBox(ctx, b, X, Y, W, H) {
    const src = b.im.src, iw = src.width, ih = src.height;
+   if (b.fit === 'contain') {
+     const scale = Math.min(W / iw, H / ih), dw = iw * scale, dh = ih * scale;
+     ctx.save(); ctx.fillStyle = '#fff'; ctx.fillRect(X, Y, W, H);
+     ctx.drawImage(src, X + (W - dw) / 2, Y + (H - dh) / 2, dw, dh); ctx.restore(); return;
+   }
    const tAR = b.rot ? H / W : W / H;
    let sw = iw, sh = ih;
    if (iw / ih > tAR) sw = ih * tAR; else sh = iw / tAR;
